@@ -9,7 +9,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections.abc
 import inspect
 import itertools
 import os
@@ -19,6 +18,7 @@ import tempfile
 import types
 import warnings
 from ast import literal_eval
+from collections.abc import Iterable
 from distutils.util import strtobool
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple, Union, cast
@@ -50,13 +50,15 @@ __all__ = [
     "is_module_ver_at_least",
     "has_option",
     "sample_slices",
+    "check_parent_dir",
     "save_obj",
 ]
 
 _seed = None
 _flag_deterministic = torch.backends.cudnn.deterministic
 _flag_cudnn_benchmark = torch.backends.cudnn.benchmark
-MAX_SEED = np.iinfo(np.uint32).max + 1  # 2**32, the actual seed should be in [0, MAX_SEED - 1] for uint32
+NP_MAX = np.iinfo(np.uint32).max
+MAX_SEED = NP_MAX + 1  # 2**32, the actual seed should be in [0, MAX_SEED - 1] for uint32
 
 
 def zip_with(op, *vals, mapfunc=map):
@@ -86,19 +88,27 @@ def issequenceiterable(obj: Any) -> bool:
     """
     Determine if the object is an iterable sequence and is not a string.
     """
-    if isinstance(obj, torch.Tensor):
-        return int(obj.dim()) > 0  # a 0-d tensor is not iterable
-    return isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes))
+    try:
+        if hasattr(obj, "ndim") and obj.ndim == 0:
+            return False  # a 0-d tensor is not iterable
+    except Exception:
+        return False
+    return isinstance(obj, Iterable) and not isinstance(obj, (str, bytes))
 
 
-def ensure_tuple(vals: Any) -> Tuple[Any, ...]:
+def ensure_tuple(vals: Any, wrap_array: bool = False) -> Tuple[Any, ...]:
     """
     Returns a tuple of `vals`.
-    """
-    if not issequenceiterable(vals):
-        return (vals,)
 
-    return tuple(vals)
+    Args:
+        vals: input data to convert to a tuple.
+        wrap_array: if `True`, treat the input numerical array (ndarray/tensor) as one item of the tuple.
+            if `False`, try to convert the array with `tuple(vals)`, default to `False`.
+
+    """
+    if wrap_array and isinstance(vals, (np.ndarray, torch.Tensor)):
+        return (vals,)
+    return tuple(vals) if issequenceiterable(vals) else (vals,)
 
 
 def ensure_tuple_size(tup: Any, dim: int, pad_val: Any = 0) -> Tuple[Any, ...]:
@@ -224,7 +234,7 @@ def get_seed() -> Optional[int]:
 
 
 def set_determinism(
-    seed: Optional[int] = np.iinfo(np.uint32).max,
+    seed: Optional[int] = NP_MAX,
     use_deterministic_algorithms: Optional[bool] = None,
     additional_settings: Optional[Union[Sequence[Callable[[int], Any]], Callable[[int], Any]]] = None,
 ) -> None:
@@ -249,7 +259,7 @@ def set_determinism(
     """
     if seed is None:
         # cast to 32 bit seed for CUDA
-        seed_ = torch.default_generator.seed() % (np.iinfo(np.int32).max + 1)
+        seed_ = torch.default_generator.seed() % MAX_SEED
         torch.manual_seed(seed_)
     else:
         seed = int(seed) % MAX_SEED
@@ -352,7 +362,7 @@ def copy_to_device(
 
 class ImageMetaKey:
     """
-    Common key names in the meta data header of images
+    Common key names in the metadata header of images
     """
 
     FILENAME_OR_OBJ = "filename_or_obj"
@@ -400,6 +410,25 @@ def sample_slices(data: NdarrayOrTensor, dim: int = 1, as_indices: bool = True, 
     return data[tuple(slices)]
 
 
+def check_parent_dir(path: PathLike, create_dir: bool = True):
+    """
+    Utility to check whether the parent directory of the `path` exists.
+
+    Args:
+        path: input path to check the parent directory.
+        create_dir: if True, when the parent directory doesn't exist, create the directory,
+            otherwise, raise exception.
+
+    """
+    path = Path(path)
+    path_dir = path.parent
+    if not path_dir.exists():
+        if create_dir:
+            path_dir.mkdir(parents=True)
+        else:
+            raise ValueError(f"the directory of specified path does not exist: `{path_dir}`.")
+
+
 def save_obj(
     obj, path: PathLike, create_dir: bool = True, atomic: bool = True, func: Optional[Callable] = None, **kwargs
 ):
@@ -421,12 +450,7 @@ def save_obj(
 
     """
     path = Path(path)
-    path_dir = path.parent
-    if not path_dir.exists():
-        if create_dir:
-            path_dir.mkdir(parents=True)
-        else:
-            raise ValueError(f"the directory of specified path is not existing: {path_dir}.")
+    check_parent_dir(path=path, create_dir=create_dir)
     if path.exists():
         # remove the existing file
         os.remove(path)

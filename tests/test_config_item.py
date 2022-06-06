@@ -26,28 +26,27 @@ _, has_tv = optional_import("torchvision", "0.8.0", min_version)
 
 TEST_CASE_1 = [{"lr": 0.001}, 0.0001]
 
-TEST_CASE_2 = [{"<name>": "LoadImaged", "<args>": {"keys": ["image"]}}, LoadImaged]
-# test python `<path>`
-TEST_CASE_3 = [{"<path>": "monai.transforms.LoadImaged", "<args>": {"keys": ["image"]}}, LoadImaged]
-# test `<disabled>`
-TEST_CASE_4 = [{"<name>": "LoadImaged", "<disabled>": True, "<args>": {"keys": ["image"]}}, dict]
-# test `<disabled>`
-TEST_CASE_5 = [{"<name>": "LoadImaged", "<disabled>": "true", "<args>": {"keys": ["image"]}}, dict]
+TEST_CASE_2 = [{"_target_": "LoadImaged", "keys": ["image"]}, LoadImaged]
+# test full module path
+TEST_CASE_3 = [{"_target_": "monai.transforms.LoadImaged", "keys": ["image"]}, LoadImaged]
+# test `_disabled_`
+TEST_CASE_4 = [{"_target_": "LoadImaged", "_disabled_": True, "keys": ["image"]}, dict]
+# test `_disabled_` with string
+TEST_CASE_5 = [{"_target_": "LoadImaged", "_disabled_": "true", "keys": ["image"]}, dict]
 # test non-monai modules and excludes
-TEST_CASE_6 = [
-    {"<path>": "torch.optim.Adam", "<args>": {"params": torch.nn.PReLU().parameters(), "lr": 1e-4}},
-    torch.optim.Adam,
-]
-TEST_CASE_7 = [{"<name>": "decollate_batch", "<args>": {"detach": True, "pad": True}}, partial]
+TEST_CASE_6 = [{"_target_": "torch.optim.Adam", "params": torch.nn.PReLU().parameters(), "lr": 1e-4}, torch.optim.Adam]
+TEST_CASE_7 = [{"_target_": "decollate_batch", "detach": True, "pad": True}, partial]
 # test args contains "name" field
 TEST_CASE_8 = [
-    {"<name>": "RandTorchVisiond", "<args>": {"keys": "image", "name": "ColorJitter", "brightness": 0.25}},
+    {"_target_": "RandTorchVisiond", "keys": "image", "name": "ColorJitter", "brightness": 0.25},
     RandTorchVisiond,
 ]
 # test execute some function in args, test pre-imported global packages `monai`
 TEST_CASE_9 = ["collate_fn", "$monai.data.list_data_collate"]
-# test lambda function, should not execute the lambda function, just change the string
+# test lambda function
 TEST_CASE_10 = ["collate_fn", "$lambda x: monai.data.list_data_collate(x) + torch.tensor(var)"]
+# test regular expression with reference
+TEST_CASE_11 = ["collate_fn", "$var + 100"]
 
 
 class TestConfigItem(unittest.TestCase):
@@ -67,32 +66,65 @@ class TestConfigItem(unittest.TestCase):
         locator = ComponentLocator(excludes=["metrics"])
         configer = ConfigComponent(id="test", config=test_input, locator=locator)
         ret = configer.instantiate()
-        if test_input.get("<disabled>", False):
-            # test `<disabled>` works fine
+        if test_input.get("_disabled_", False):
+            # test `_disabled_` works fine
             self.assertEqual(ret, None)
             return
         self.assertTrue(isinstance(ret, output_type))
         if isinstance(ret, LoadImaged):
             self.assertEqual(ret.keys[0], "image")
 
-    @parameterized.expand([TEST_CASE_9, TEST_CASE_10])
+    @parameterized.expand([TEST_CASE_9, TEST_CASE_10, TEST_CASE_11])
     def test_expression(self, id, test_input):
         configer = ConfigExpression(id=id, config=test_input, globals={"monai": monai, "torch": torch})
         var = 100
-        ret = configer.evaluate(locals={"var": var})
-        self.assertTrue(isinstance(ret, Callable))
+        ret = configer.evaluate(globals={"var": var, "monai": monai})  # `{"monai": monai}` to verify the warning
+        if isinstance(ret, Callable):
+            self.assertTrue(isinstance(ret([torch.tensor(1), torch.tensor(2)]), torch.Tensor))
+        else:
+            # also test the `locals` for regular expressions
+            ret = configer.evaluate(locals={"var": var})
+            self.assertEqual(ret, 200)
 
     def test_lazy_instantiation(self):
-        config = {"<name>": "DataLoader", "<args>": {"dataset": Dataset(data=[1, 2]), "batch_size": 2}}
+        config = {"_target_": "DataLoader", "dataset": Dataset(data=[1, 2]), "batch_size": 2}
         configer = ConfigComponent(config=config, locator=None)
         init_config = configer.get_config()
         # modify config content at runtime
-        init_config["<args>"]["batch_size"] = 4
+        init_config["batch_size"] = 4
         configer.update_config(config=init_config)
 
         ret = configer.instantiate()
         self.assertTrue(isinstance(ret, DataLoader))
         self.assertEqual(ret.batch_size, 4)
+
+    @parameterized.expand([("$import json", "json"), ("$import json as j", "j")])
+    def test_import(self, stmt, mod_name):
+        test_globals = {}
+        ConfigExpression(id="", config=stmt, globals=test_globals).evaluate()
+        self.assertTrue(callable(test_globals[mod_name].dump))
+
+    @parameterized.expand(
+        [
+            ("$from json import dump", "dump"),
+            ("$from json import dump, dumps", "dump"),
+            ("$from json import dump as jd", "jd"),
+            ("$from json import dump as jd, dumps as ds", "jd"),
+        ]
+    )
+    def test_import_from(self, stmt, mod_name):
+        test_globals = {}
+        ConfigExpression(id="", config=stmt, globals=test_globals).evaluate()
+        self.assertTrue(callable(test_globals[mod_name]))
+        self.assertTrue(ConfigExpression.is_import_statement(ConfigExpression(id="", config=stmt).config))
+
+    @parameterized.expand(
+        [("$from json import dump", True), ("$print()", False), ("$import json", True), ("import json", False)]
+    )
+    def test_is_import_stmt(self, stmt, expected):
+        expr = ConfigExpression(id="", config=stmt)
+        flag = expr.is_import_statement(expr.config)
+        self.assertEqual(flag, expected)
 
 
 if __name__ == "__main__":

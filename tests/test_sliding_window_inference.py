@@ -16,7 +16,10 @@ import torch
 from parameterized import parameterized
 
 from monai.inferers import SlidingWindowInferer, sliding_window_inference
+from monai.utils import optional_import
 from tests.utils import skip_if_no_cuda
+
+_, has_tqdm = optional_import("tqdm")
 
 TEST_CASES = [
     [(2, 3, 16), (4,), 3, 0.25, "constant", torch.device("cpu:0")],  # 1D small roi
@@ -145,6 +148,7 @@ class TestSlidingWindowInference(unittest.TestCase):
             cval=-1,
             mode="gaussian",
             sigma_scale=1.0,
+            progress=has_tqdm,
         )
         expected = np.array(
             [
@@ -171,6 +175,11 @@ class TestSlidingWindowInference(unittest.TestCase):
         result = SlidingWindowInferer(roi_shape, sw_batch_size, overlap=0.5, mode="gaussian", sigma_scale=[1.0, 1.0])(
             inputs, _Pred().compute
         )
+        np.testing.assert_allclose(result.cpu().numpy(), expected, rtol=1e-4)
+
+        result = SlidingWindowInferer(
+            roi_shape, sw_batch_size, overlap=0.5, mode="gaussian", sigma_scale=[1.0, 1.0], cache_roi_weight_map=True
+        )(inputs, _Pred().compute)
         np.testing.assert_allclose(result.cpu().numpy(), expected, rtol=1e-4)
 
     def test_cval(self):
@@ -222,16 +231,79 @@ class TestSlidingWindowInference(unittest.TestCase):
             0.0,
             device,
             device,
+            has_tqdm,
+            None,
             t1,
             test2=t2,
         )
         expected = np.ones((1, 1, 3, 3)) + 2.0
         np.testing.assert_allclose(result.cpu().numpy(), expected, rtol=1e-4)
 
-        result = SlidingWindowInferer(roi_shape, sw_batch_size, overlap=0.5, mode="constant", cval=-1)(
-            inputs, compute, t1, test2=t2
-        )
+        result = SlidingWindowInferer(
+            roi_shape, sw_batch_size, overlap=0.5, mode="constant", cval=-1, progress=has_tqdm
+        )(inputs, compute, t1, test2=t2)
         np.testing.assert_allclose(result.cpu().numpy(), expected, rtol=1e-4)
+
+    def test_multioutput(self):
+        device = "cuda" if torch.cuda.is_available() else "cpu:0"
+        inputs = torch.ones((1, 6, 20, 20)).to(device=device)
+        roi_shape = (8, 8)
+        sw_batch_size = 10
+
+        def compute(data):
+            return data + 1, data[:, ::3, ::2, ::2] + 2, data[:, ::2, ::4, ::4] + 3
+
+        def compute_dict(data):
+            return {1: data + 1, 2: data[:, ::3, ::2, ::2] + 2, 3: data[:, ::2, ::4, ::4] + 3}
+
+        result = sliding_window_inference(
+            inputs,
+            roi_shape,
+            sw_batch_size,
+            compute,
+            0.5,
+            "constant",
+            1.0,
+            "constant",
+            0.0,
+            device,
+            device,
+            has_tqdm,
+            None,
+        )
+        result_dict = sliding_window_inference(
+            inputs,
+            roi_shape,
+            sw_batch_size,
+            compute_dict,
+            0.5,
+            "constant",
+            1.0,
+            "constant",
+            0.0,
+            device,
+            device,
+            has_tqdm,
+            None,
+        )
+        expected = (np.ones((1, 6, 20, 20)) + 1, np.ones((1, 2, 10, 10)) + 2, np.ones((1, 3, 5, 5)) + 3)
+        expected_dict = {1: np.ones((1, 6, 20, 20)) + 1, 2: np.ones((1, 2, 10, 10)) + 2, 3: np.ones((1, 3, 5, 5)) + 3}
+        for rr, ee in zip(result, expected):
+            np.testing.assert_allclose(rr.cpu().numpy(), ee, rtol=1e-4)
+        for rr, _ in zip(result_dict, expected_dict):
+            np.testing.assert_allclose(result_dict[rr].cpu().numpy(), expected_dict[rr], rtol=1e-4)
+
+        result = SlidingWindowInferer(
+            roi_shape, sw_batch_size, overlap=0.5, mode="constant", cval=-1, progress=has_tqdm
+        )(inputs, compute)
+        for rr, ee in zip(result, expected):
+            np.testing.assert_allclose(rr.cpu().numpy(), ee, rtol=1e-4)
+
+        result_dict = SlidingWindowInferer(
+            roi_shape, sw_batch_size, overlap=0.5, mode="constant", cval=-1, progress=has_tqdm
+        )(inputs, compute_dict)
+        for rr, _ in zip(result_dict, expected_dict):
+            np.testing.assert_allclose(result_dict[rr].cpu().numpy(), expected_dict[rr], rtol=1e-4)
 
 
 if __name__ == "__main__":
