@@ -15,6 +15,9 @@ Applications
 .. autoclass:: DecathlonDataset
     :members:
 
+.. autoclass:: TciaDataset
+    :members:
+
 .. autoclass:: CrossValidation
     :members:
 
@@ -177,3 +180,33 @@ Applications
 ~~~~~~~~~~~~~~~~~~~~~~~~
 .. automodule:: monai.apps.detection.utils.box_selector
     :members:
+
+`Detection metrics`
+~~~~~~~~~~~~~~~~~~~
+.. automodule:: monai.apps.detection.metrics.coco
+    :members:
+.. automodule:: monai.apps.detection.metrics.matching
+    :members:
+
+`Reconstruction`
+----------------
+
+`ConvertToTensorComplex`
+~~~~~~~~~~~~~~~~~~~~~~~~
+.. autofunction:: monai.apps.reconstruction.complex_utils.convert_to_tensor_complex
+
+`ComplexAbs`
+~~~~~~~~~~~~
+.. autofunction:: monai.apps.reconstruction.complex_utils.complex_abs
+
+`RootSumOfSquares`
+~~~~~~~~~~~~~~~~~~
+.. autofunction:: monai.apps.reconstruction.mri_utils.root_sum_of_squares
+
+`ComplexMul`
+~~~~~~~~~~~~
+.. autofunction:: monai.apps.reconstruction.complex_utils.complex_mul
+
+`ComplexConj`
+~~~~~~~~~~~~~
+.. autofunction:: monai.apps.reconstruction.complex_utils.complex_conj

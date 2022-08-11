@@ -98,17 +98,17 @@ def percentile(
     Returns:
         Resulting value (scalar)
     """
-    if np.isscalar(q):
-        if not 0 <= q <= 100:  # type: ignore
-            raise ValueError
-    elif any(q < 0) or any(q > 100):
-        raise ValueError
+    q_np = convert_data_type(q, output_type=np.ndarray, wrap_sequence=True)[0]
+    if ((q_np < 0) | (q_np > 100)).any():
+        raise ValueError(f"q values must be in [0, 100], got values: {q}.")
     result: Union[NdarrayOrTensor, float, int]
-    if isinstance(x, np.ndarray):
-        result = np.percentile(x, q, axis=dim, keepdims=keepdim, **kwargs)
+    if isinstance(x, np.ndarray) or (isinstance(x, torch.Tensor) and torch.numel(x) > 1_000_000):  # pytorch#64947
+        _x = convert_data_type(x, output_type=np.ndarray)[0]
+        result = np.percentile(_x, q_np, axis=dim, keepdims=keepdim, **kwargs)
+        result = convert_to_dst_type(result, x)[0]
     else:
-        q = torch.tensor(q, device=x.device)
-        result = torch.quantile(x, q / 100.0, dim=dim, keepdim=keepdim)
+        q = convert_to_dst_type(q_np / 100.0, x)[0]
+        result = torch.quantile(x, q, dim=dim, keepdim=keepdim)
     return result
 
 
@@ -276,7 +276,7 @@ def cumsum(a: NdarrayOrTensor, axis=None, **kwargs) -> NdarrayOrTensor:
     """
 
     if isinstance(a, np.ndarray):
-        return np.cumsum(a, axis)
+        return np.cumsum(a, axis)  # type: ignore
     if axis is None:
         return torch.cumsum(a[:], 0, **kwargs)
     return torch.cumsum(a, dim=axis, **kwargs)
@@ -314,7 +314,7 @@ def repeat(a: NdarrayOrTensor, repeats: int, axis: Optional[int] = None, **kwarg
 
     Args:
         a: input data to repeat.
-        repeats: number of repetitions for each element, repeats is broadcasted to fit the shape of the given axis.
+        repeats: number of repetitions for each element, repeats is broadcast to fit the shape of the given axis.
         axis: axis along which to repeat values.
         kwargs: if `a` is PyTorch Tensor, additional args for `torch.repeat_interleave`, more details:
             https://pytorch.org/docs/stable/generated/torch.repeat_interleave.html.
@@ -389,3 +389,14 @@ def unique(x: NdarrayTensor) -> NdarrayTensor:
         x: array/tensor
     """
     return torch.unique(x) if isinstance(x, torch.Tensor) else np.unique(x)  # type: ignore
+
+
+def linalg_inv(x: NdarrayTensor) -> NdarrayTensor:
+    """`torch.linalg.inv` with equivalent implementation for numpy.
+
+    Args:
+        x: array/tensor
+    """
+    if isinstance(x, torch.Tensor) and hasattr(torch, "inverse"):  # pytorch 1.7.0
+        return torch.inverse(x)  # type: ignore
+    return torch.linalg.inv(x) if isinstance(x, torch.Tensor) else np.linalg.inv(x)  # type: ignore

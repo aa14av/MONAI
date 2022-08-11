@@ -13,7 +13,7 @@ A collection of "vanilla" transforms for box operations
 https://github.com/Project-MONAI/MONAI/wiki/MONAI_Design
 """
 
-from typing import Optional, Sequence, Tuple, Type, Union
+from typing import Callable, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -27,7 +27,7 @@ from monai.data.box_utils import (
     get_spatial_dims,
     spatial_crop_boxes,
 )
-from monai.transforms import SpatialCrop
+from monai.transforms import Rotate90, SpatialCrop
 from monai.transforms.transform import Transform
 from monai.utils import ensure_tuple, ensure_tuple_rep, fall_back_tuple, look_up_option
 from monai.utils.enums import TransformBackends
@@ -38,6 +38,7 @@ from .box_ops import (
     convert_mask_to_box,
     flip_boxes,
     resize_boxes,
+    rot90_boxes,
     select_labels,
     zoom_boxes,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "BoxToMask",
     "MaskToBox",
     "SpatialCropBox",
+    "RotateBox90",
 ]
 
 
@@ -203,9 +205,7 @@ class ZoomBox(Transform):
         self.keep_size = keep_size
         self.kwargs = kwargs
 
-    def __call__(
-        self, boxes: NdarrayOrTensor, src_spatial_size: Union[Sequence[int], int, None] = None
-    ) -> NdarrayOrTensor:  # type: ignore
+    def __call__(self, boxes: torch.Tensor, src_spatial_size: Union[Sequence[int], int, None] = None):
         """
         Args:
             boxes: source bounding boxes, Nx4 or Nx6 torch tensor or ndarray. The box mode is assumed to be ``StandardMode``
@@ -264,9 +264,7 @@ class ResizeBox(Transform):
         self.size_mode = look_up_option(size_mode, ["all", "longest"])
         self.spatial_size = spatial_size
 
-    def __call__(  # type: ignore
-        self, boxes: NdarrayOrTensor, src_spatial_size: Union[Sequence[int], int]
-    ) -> NdarrayOrTensor:
+    def __call__(self, boxes: NdarrayOrTensor, src_spatial_size: Union[Sequence[int], int]):  # type: ignore
         """
         Args:
             boxes: source bounding boxes, Nx4 or Nx6 torch tensor or ndarray. The box mode is assumed to be ``StandardMode``
@@ -314,9 +312,7 @@ class FlipBox(Transform):
     def __init__(self, spatial_axis: Optional[Union[Sequence[int], int]] = None) -> None:
         self.spatial_axis = spatial_axis
 
-    def __call__(  # type: ignore
-        self, boxes: NdarrayOrTensor, spatial_size: Union[Sequence[int], int]
-    ) -> NdarrayOrTensor:
+    def __call__(self, boxes: NdarrayOrTensor, spatial_size: Union[Sequence[int], int]):  # type: ignore
         """
         Args:
             boxes: bounding boxes, Nx4 or Nx6 torch tensor or ndarray. The box mode is assumed to be ``StandardMode``
@@ -487,7 +483,7 @@ class SpatialCropBox(SpatialCrop):
 
     def __call__(  # type: ignore
         self, boxes: NdarrayOrTensor, labels: Union[Sequence[NdarrayOrTensor], NdarrayOrTensor]
-    ) -> Tuple[NdarrayOrTensor, Union[Tuple, NdarrayOrTensor]]:
+    ):
         """
         Args:
             boxes: bounding boxes, Nx4 or Nx6 torch tensor or ndarray. The box mode is assumed to be ``StandardMode``
@@ -514,3 +510,30 @@ class SpatialCropBox(SpatialCrop):
             [self.slices[axis].stop for axis in range(spatial_dims)],
         )
         return boxes_crop, select_labels(labels, keep)
+
+
+class RotateBox90(Rotate90):
+    """
+    Rotate a boxes by 90 degrees in the plane specified by `axes`.
+    See box_ops.rot90_boxes for additional details
+
+    Args:
+        k: number of times to rotate by 90 degrees.
+        spatial_axes: 2 int numbers, defines the plane to rotate with 2 spatial axes.
+            Default: (0, 1), this is the first two axis in spatial dimensions.
+            If axis is negative it counts from the last to the first axis.
+    """
+
+    backend = [TransformBackends.TORCH, TransformBackends.NUMPY]
+
+    def __init__(self, k: int = 1, spatial_axes: Tuple[int, int] = (0, 1)) -> None:
+        super().__init__(k, spatial_axes)
+
+    def __call__(self, boxes: NdarrayOrTensor, spatial_size: Union[Sequence[int], int]):  # type: ignore
+        """
+        Args:
+            img: channel first array, must have shape: (num_channels, H[, W, ..., ]),
+        """
+        rot90: Callable = rot90_boxes
+        out: NdarrayOrTensor = rot90(boxes, spatial_size, self.k, self.spatial_axes)
+        return out
